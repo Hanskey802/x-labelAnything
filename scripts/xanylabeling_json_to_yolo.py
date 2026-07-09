@@ -1,8 +1,10 @@
 import argparse
+import ast
 import json
 import shutil
 from pathlib import Path
 
+import onnx
 import yaml
 
 
@@ -13,9 +15,49 @@ def load_classes_from_yaml(yaml_path: Path) -> list[str]:
     with yaml_path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     classes = data.get("classes")
-    if not isinstance(classes, list) or not classes:
-        raise ValueError(f"No valid 'classes' found in {yaml_path}")
-    return [str(x) for x in classes]
+    if isinstance(classes, list) and classes:
+        return [str(x) for x in classes]
+
+    model_path = data.get("model_path")
+    if not model_path:
+        raise ValueError(
+            f"No valid 'classes' or 'model_path' found in {yaml_path}"
+        )
+
+    model_path = Path(str(model_path)).expanduser()
+    if not model_path.is_absolute():
+        model_path = (yaml_path.parent / model_path).resolve()
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model path not found: {model_path}")
+
+    return load_classes_from_onnx(model_path)
+
+
+def load_classes_from_onnx(model_path: Path) -> list[str]:
+    model = onnx.load(str(model_path))
+    metadata = {prop.key: prop.value for prop in model.metadata_props}
+    names = metadata.get("names")
+    if not names:
+        raise ValueError(f"No ONNX metadata 'names' found in {model_path}")
+
+    try:
+        parsed = ast.literal_eval(names)
+    except Exception as exc:
+        raise ValueError(
+            f"Failed to parse ONNX metadata 'names' in {model_path}"
+        ) from exc
+
+    if isinstance(parsed, dict):
+        try:
+            items = sorted(parsed.items(), key=lambda item: int(item[0]))
+        except Exception:
+            items = parsed.items()
+        return [str(value) for _, value in items]
+
+    if isinstance(parsed, (list, tuple)):
+        return [str(value) for value in parsed]
+
+    raise ValueError(f"Unsupported ONNX metadata 'names' format in {model_path}")
 
 
 def discover_classes(json_files: list[Path]) -> list[str]:

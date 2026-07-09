@@ -1,4 +1,5 @@
 import os
+import ast
 import cv2
 import numpy as np
 from typing import Union, Tuple, List
@@ -88,7 +89,7 @@ class YOLO(Model):
 
         self.replace = True
         self.model_type = self.config["type"]
-        self.classes = self.config.get("classes", [])
+        self.classes = self._resolve_classes()
         self.stride = self.config.get("stride", 32)
         self.anchors = self.config.get("anchors", None)
         self.agnostic = self.config.get("agnostic", False)
@@ -199,6 +200,48 @@ class YOLO(Model):
 
         if isinstance(self.classes, dict):
             self.classes = list(self.classes.values())
+
+    def _parse_metadata_classes(self, metadata_value):
+        if not metadata_value:
+            return []
+
+        try:
+            parsed = ast.literal_eval(metadata_value)
+        except Exception:
+            return []
+
+        if isinstance(parsed, dict):
+            try:
+                items = sorted(parsed.items(), key=lambda item: int(item[0]))
+            except Exception:
+                items = parsed.items()
+            return [str(value) for _, value in items]
+
+        if isinstance(parsed, (list, tuple)):
+            return [str(value) for value in parsed]
+
+        return []
+
+    def _resolve_classes(self):
+        classes = self.config.get("classes", [])
+        if isinstance(classes, dict) or (
+            isinstance(classes, list) and len(classes) > 0
+        ):
+            return classes
+
+        metadata_classes = self._parse_metadata_classes(
+            self.net.get_metadata_info("names")
+        )
+        if metadata_classes:
+            logger.info(
+                "Loaded class names from ONNX metadata for model %s: %s",
+                self.config.get("name"),
+                metadata_classes,
+            )
+            self.config["classes"] = metadata_classes
+            return metadata_classes
+
+        return classes
 
     def set_auto_labeling_conf(self, value):
         """set auto labeling confidence threshold"""

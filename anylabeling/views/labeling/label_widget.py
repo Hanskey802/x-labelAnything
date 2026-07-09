@@ -2055,6 +2055,9 @@ class LabelingWidget(LabelDialog):
         # Restore application settings.
         self.settings = QtCore.QSettings("anylabeling", "anylabeling")
         self.recent_files = self.settings.value("recent_files", []) or []
+        self.last_open_dir = (
+            self.settings.value("last_open_dir", "", type=str) or None
+        )
         size = self.settings.value("window/size", QtCore.QSize(600, 500))
         position = self.settings.value("window/position", QtCore.QPoint(0, 0))
         # state = self.settings.value("window/state", QtCore.QByteArray())
@@ -3775,8 +3778,12 @@ class LabelingWidget(LabelDialog):
     def closeEvent(self, event):
         if not self.may_continue():
             event.ignore()
+            return
         self.settings.setValue(
             "filename", self.filename if self.filename else ""
+        )
+        self.settings.setValue(
+            "last_open_dir", self.last_open_dir if self.last_open_dir else ""
         )
         self.settings.setValue("window/size", self.size())
         self.settings.setValue("window/position", self.pos())
@@ -4447,10 +4454,11 @@ class LabelingWidget(LabelDialog):
         if not self.may_continue() or not dirpath:
             return
 
-        self.last_open_dir = dirpath
+        self.last_open_dir = osp.abspath(dirpath)
+        self.settings.setValue("last_open_dir", self.last_open_dir)
         self.filename = None
         self.file_list_widget.clear()
-        for filename in utils.scan_all_images(dirpath):
+        for filename in utils.scan_all_images(self.last_open_dir):
             if pattern and pattern not in filename:
                 continue
             label_file = osp.splitext(filename)[0] + ".json"

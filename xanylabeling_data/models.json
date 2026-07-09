@@ -6,11 +6,11 @@
                 "favorite": false,
                 "display_name": "...Load Custom Model"
             },
-            "_custom_WeiQiu-yolov5": {
+            "_custom_xinda-yolov5": {
                 "selected": true,
                 "favorite": false,
-                "display_name": "WeiQiu YOLOv5",
-                "config_path": "D:/Work_mumu/x-labelAnything/custom_models/WeiQiu-yolov5.yaml"
+                "display_name": "Xinda YOLOv5",
+                "config_path": "E:/WorkSpace/ClearML/x-labelAnything/custom_models/xinda-yolov5.yaml"
             }
         },
         "Alibaba": {

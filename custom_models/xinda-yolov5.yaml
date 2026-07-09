@@ -5,17 +5,3 @@ display_name: Xinda YOLOv5
 model_path: E:/WorkSpace/ClearML/ClearML/runs/yolov5/train_Cap0_yolov5s_640_e100/weights/trainCap0.onnx
 iou_threshold: 0.45
 conf_threshold: 0.25
-classes:
-  - class_0
-  - class_1
-  - class_2
-  - class_3
-  - class_4
-  - class_5
-  - class_6
-  - class_7
-  - class_8
-  - class_9
-  - class_10
-  - class_11
-  - class_12

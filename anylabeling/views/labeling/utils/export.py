@@ -121,6 +121,8 @@ def _check_filename_exist(self):
 
 
 def _guess_json_to_yolo_input_root(self):
+    if self.last_open_dir and osp.isdir(self.last_open_dir):
+        return str(pathlib.Path(self.last_open_dir).resolve())
     if not self.filename:
         return ""
 
@@ -161,18 +163,13 @@ def export_xanylabeling_json_to_yolo(self):
         )
         return
 
-    default_input_root = (
-        self.settings.value("json_to_yolo/input_root", "", type=str)
-        or _guess_json_to_yolo_input_root(self)
+    default_input_root = _guess_json_to_yolo_input_root(self) or self.settings.value(
+        "json_to_yolo/input_root", "", type=str
     )
-    default_output_root = self.settings.value(
-        "json_to_yolo/output_root", "", type=str
-    )
+    default_output_root = ""
     if not default_output_root and default_input_root:
         input_path = pathlib.Path(default_input_root)
-        default_output_root = str(
-            input_path.parent / f"{input_path.name}_yolo_from_json"
-        )
+        default_output_root = str(input_path.parent / f"{input_path.name}-yolo_dataset")
     default_classes_yaml = self.settings.value(
         "json_to_yolo/classes_yaml", "", type=str
     )
