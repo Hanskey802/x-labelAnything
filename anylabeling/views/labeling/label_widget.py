@@ -6,9 +6,11 @@ import os
 import os.path as osp
 import re
 import shutil
+import tempfile
 
 import cv2
 import numpy as np
+from PIL import Image, ImageOps
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import Qt, pyqtSlot
 from PyQt5.QtWidgets import (
@@ -64,6 +66,140 @@ from .widgets import (
 
 LABEL_COLORMAP = utils.label_colormap()
 LABEL_OPACITY = 128
+IMAGE_SPLIT_OUTPUT_FORMATS = {".jpg", ".jpeg", ".jpe"}
+
+
+class SplitImagesWorker(QtCore.QObject):
+    progress_changed = QtCore.pyqtSignal(int, str)
+    completed = QtCore.pyqtSignal(int)
+    failed = QtCore.pyqtSignal(str)
+
+    def __init__(self, dirpath, images, rows, cols, raw_dir, extensions):
+        super().__init__()
+        self.dirpath = dirpath
+        self.images = images
+        self.rows = rows
+        self.cols = cols
+        self.raw_dir = raw_dir
+        self.extensions = extensions
+
+    @QtCore.pyqtSlot()
+    def run(self):
+        try:
+            tile_count = self.split_images_in_folder()
+        except Exception as e:
+            logger.exception("Failed to split images")
+            self.failed.emit(str(e))
+            return
+        self.completed.emit(tile_count)
+
+    def split_images_in_folder(self):
+        image_set = {osp.abspath(image) for image in self.images}
+        temp_dir = tempfile.mkdtemp(
+            prefix=f".{osp.basename(osp.normpath(self.dirpath))}_split_",
+            dir=osp.dirname(self.dirpath),
+        )
+        tile_count = 0
+        progress = 0
+        try:
+            for index, image_path in enumerate(self.images, start=1):
+                tile_count += self.write_split_image_tiles(
+                    image_path, temp_dir
+                )
+                progress += 1
+                self.progress_changed.emit(
+                    progress,
+                    f"Splitting image {index}/{len(self.images)}",
+                )
+
+            os.makedirs(self.raw_dir, exist_ok=False)
+            for index, image_path in enumerate(self.images, start=1):
+                rel_path = osp.relpath(image_path, self.dirpath)
+                raw_path = osp.join(self.raw_dir, rel_path)
+                os.makedirs(osp.dirname(raw_path), exist_ok=True)
+                shutil.move(image_path, raw_path)
+                progress += 1
+                self.progress_changed.emit(
+                    progress,
+                    f"Moving original image {index}/{len(self.images)}",
+                )
+
+            for root, _, files in os.walk(self.dirpath):
+                for filename in files:
+                    path = osp.abspath(osp.join(root, filename))
+                    if path in image_set:
+                        continue
+                    if path.lower().endswith(self.extensions):
+                        os.remove(path)
+            progress += 1
+            self.progress_changed.emit(progress, "Cleaning image folder")
+
+            for root, _, files in os.walk(temp_dir):
+                rel_root = osp.relpath(root, temp_dir)
+                target_root = (
+                    self.dirpath
+                    if rel_root == "."
+                    else osp.join(self.dirpath, rel_root)
+                )
+                os.makedirs(target_root, exist_ok=True)
+                for filename in files:
+                    shutil.move(
+                        osp.join(root, filename),
+                        osp.join(target_root, filename),
+                    )
+            progress += 1
+            self.progress_changed.emit(progress, "Writing split image tiles")
+        finally:
+            if osp.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+        return tile_count
+
+    def write_split_image_tiles(self, image_path, temp_dir):
+        rel_path = osp.relpath(image_path, self.dirpath)
+        rel_dir = osp.dirname(rel_path)
+        base_name, ext = osp.splitext(osp.basename(image_path))
+        output_dir = osp.join(temp_dir, rel_dir)
+        os.makedirs(output_dir, exist_ok=True)
+
+        with Image.open(image_path) as image:
+            image = ImageOps.exif_transpose(image)
+            width, height = image.size
+            x_edges = [
+                round(width * col / self.cols) for col in range(self.cols + 1)
+            ]
+            y_edges = [
+                round(height * row / self.rows)
+                for row in range(self.rows + 1)
+            ]
+
+            count = 0
+            for row in range(self.rows):
+                for col in range(self.cols):
+                    left, right = x_edges[col], x_edges[col + 1]
+                    top, bottom = y_edges[row], y_edges[row + 1]
+                    if right <= left or bottom <= top:
+                        continue
+
+                    tile = image.crop((left, top, right, bottom))
+                    output_path = osp.join(
+                        output_dir,
+                        f"{base_name}_r{row + 1:02d}_c{col + 1:02d}{ext}",
+                    )
+                    save_kwargs = {}
+                    if ext.lower() in IMAGE_SPLIT_OUTPUT_FORMATS:
+                        save_kwargs["quality"] = 95
+                        save_kwargs["subsampling"] = 0
+                    if tile.mode == "RGBA" and ext.lower() in (
+                        ".jpg",
+                        ".jpeg",
+                        ".jpe",
+                        ".bmp",
+                    ):
+                        tile = tile.convert("RGB")
+                    tile.save(output_path, **save_kwargs)
+                    count += 1
+        return count
 
 
 class LabelingWidget(LabelDialog):
@@ -212,6 +348,13 @@ class LabelingWidget(LabelDialog):
         self.file_search = SearchBar()
         self.file_search.setPlaceholderText(self.tr("Search Filename"))
         self.file_search.textChanged.connect(self.file_search_changed)
+        self.split_images_button = QtWidgets.QPushButton(
+            self.tr("Split Images")
+        )
+        self.split_images_button.setToolTip(
+            self.tr("Split all images in the opened folder by rows and columns")
+        )
+        self.split_images_button.clicked.connect(self.split_open_folder_images)
         self.file_list_widget = QtWidgets.QListWidget()
         self.file_list_widget.itemSelectionChanged.connect(
             self.file_selection_changed
@@ -220,6 +363,7 @@ class LabelingWidget(LabelDialog):
         file_list_layout.setContentsMargins(0, 4, 0, 0)
         file_list_layout.setSpacing(4)
         file_list_layout.addWidget(self.file_search)
+        file_list_layout.addWidget(self.split_images_button)
         file_list_layout.addWidget(self.file_list_widget)
         self.file_dock = QtWidgets.QDockWidget("", self)
         self.file_dock.setObjectName("Files")
@@ -4079,6 +4223,182 @@ class LabelingWidget(LabelDialog):
             )
         )
         self.import_image_folder(target_dir_path)
+
+    def split_open_folder_images(self):
+        if not self.last_open_dir:
+            self.error_message(
+                self.tr("No opened folder"),
+                self.tr("Open an image folder before splitting images."),
+            )
+            return
+        if not self.may_continue():
+            return
+
+        dirpath = osp.abspath(self.last_open_dir)
+        if not osp.isdir(dirpath):
+            self.error_message(
+                self.tr("Invalid folder"),
+                self.tr("The opened folder does not exist: <b>%s</b>")
+                % dirpath,
+            )
+            return
+
+        images = utils.scan_all_images(dirpath)
+        if not images:
+            self.error_message(
+                self.tr("No images"),
+                self.tr("No images were found in the opened folder."),
+            )
+            return
+
+        rows, cols = self.get_split_grid()
+        if rows is None or cols is None:
+            return
+
+        raw_dir = self.get_raw_folder_path(dirpath)
+        if osp.exists(raw_dir):
+            self.error_message(
+                self.tr("Raw folder exists"),
+                self.tr(
+                    "Backup folder already exists: <b>%s</b><br/>"
+                    "Please rename or remove it before splitting again."
+                )
+                % raw_dir,
+            )
+            return
+
+        mb = QtWidgets.QMessageBox
+        msg = self.tr(
+            "This will split %d image(s) in:<br/><b>%s</b><br/><br/>"
+            "Original images will be moved to:<br/><b>%s</b><br/><br/>"
+            "The opened folder will contain only the split image tiles. "
+            "Continue?"
+        ) % (len(images), dirpath, raw_dir)
+        answer = mb.warning(
+            self,
+            self.tr("Split Images"),
+            msg,
+            mb.Yes | mb.No,
+            mb.No,
+        )
+        if answer != mb.Yes:
+            return
+
+        self.start_split_images_worker(dirpath, images, rows, cols, raw_dir)
+
+    def start_split_images_worker(self, dirpath, images, rows, cols, raw_dir):
+        total_steps = len(images) * 2 + 2
+        progress_dialog = QtWidgets.QProgressDialog(
+            self.tr("Preparing split..."),
+            self.tr("Cancel"),
+            0,
+            total_steps,
+            self,
+        )
+        progress_dialog.setCancelButton(None)
+        progress_dialog.setWindowTitle(self.tr("Split Images"))
+        progress_dialog.setWindowModality(Qt.WindowModal)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setMinimumWidth(420)
+        progress_dialog.setValue(0)
+
+        thread = QtCore.QThread(self)
+        worker = SplitImagesWorker(
+            dirpath,
+            images,
+            rows,
+            cols,
+            raw_dir,
+            self.supported_image_extensions(),
+        )
+        worker.moveToThread(thread)
+        self.split_images_thread = thread
+        self.split_images_worker = worker
+        self.split_images_progress_dialog = progress_dialog
+
+        def update_progress(value, message):
+            progress_dialog.setLabelText(message)
+            progress_dialog.setValue(value)
+
+        def cleanup_thread():
+            worker.deleteLater()
+            thread.quit()
+            thread.wait()
+            thread.deleteLater()
+            self.split_images_button.setEnabled(True)
+            self.split_images_thread = None
+            self.split_images_worker = None
+            self.split_images_progress_dialog = None
+
+        def finish_split(tile_count):
+            progress_dialog.setValue(total_steps)
+            progress_dialog.close()
+            cleanup_thread()
+            self.zoom_values.clear()
+            self.brightness_contrast_values.clear()
+            self.scroll_values = {Qt.Horizontal: {}, Qt.Vertical: {}}
+            self.import_image_folder(dirpath)
+            self.status(
+                self.tr("Split %d image(s) into %d tile(s)")
+                % (len(images), tile_count)
+            )
+
+        def fail_split(message):
+            progress_dialog.close()
+            cleanup_thread()
+            self.error_message(
+                self.tr("Split failed"),
+                self.tr("Failed to split images:<br/><b>%s</b>") % message,
+            )
+
+        self.split_images_button.setEnabled(False)
+        thread.started.connect(worker.run)
+        worker.progress_changed.connect(update_progress)
+        worker.completed.connect(finish_split)
+        worker.failed.connect(fail_split)
+        progress_dialog.show()
+        thread.start()
+
+    def get_split_grid(self):
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle(self.tr("Split Images"))
+
+        rows_spin = QtWidgets.QSpinBox(dialog)
+        rows_spin.setRange(1, 100)
+        rows_spin.setValue(2)
+        cols_spin = QtWidgets.QSpinBox(dialog)
+        cols_spin.setRange(1, 100)
+        cols_spin.setValue(2)
+
+        form_layout = QtWidgets.QFormLayout()
+        form_layout.addRow(self.tr("Rows"), rows_spin)
+        form_layout.addRow(self.tr("Columns"), cols_spin)
+
+        button_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.addLayout(form_layout)
+        layout.addWidget(button_box)
+        dialog.setLayout(layout)
+
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return None, None
+        return rows_spin.value(), cols_spin.value()
+
+    def get_raw_folder_path(self, dirpath):
+        parent_dir = osp.dirname(dirpath)
+        raw_name = f"{osp.basename(osp.normpath(dirpath))}_raw"
+        return osp.join(parent_dir, raw_name)
+
+    def supported_image_extensions(self):
+        return tuple(
+            f".{fmt.data().decode().lower()}"
+            for fmt in QtGui.QImageReader.supportedImageFormats()
+        )
 
     @property
     def image_list(self):

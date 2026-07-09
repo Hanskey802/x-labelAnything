@@ -1,0 +1,11 @@
+labels:
+  - id: 0
+    name: resistor
+    display_name: 贴片电阻
+    description: "0402封装贴片电阻，元件本体黑色，中间黑色，两端焊盘银白色"
+    color: "#ff6600"
+  - id: 1
+    name: capacitor
+    display_name: 贴片电容
+    description: "0402陶瓷电容，元件本体米白色，两端金属焊盘"
+    color: "#00ccff"
