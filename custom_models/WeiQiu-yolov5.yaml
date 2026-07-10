@@ -5,17 +5,17 @@ display_name: WeiQiu YOLOv5
 model_path: D:/Img/微球自动化/权重集合/Detect20251110.onnx
 iou_threshold: 0.45
 conf_threshold: 0.25
-classes:
-  - class_0
-  - class_1
-  - class_2
-  - class_3
-  - class_4
-  - class_5
-  - class_6
-  - class_7
-  - class_8
-  - class_9
-  - class_10
-  - class_11
-  - class_12
+# classes:
+#   - class_0
+#   - class_1
+#   - class_2
+#   - class_3
+#   - class_4
+#   - class_5
+#   - class_6
+#   - class_7
+#   - class_8
+#   - class_9
+#   - class_10
+#   - class_11
+#   - class_12
