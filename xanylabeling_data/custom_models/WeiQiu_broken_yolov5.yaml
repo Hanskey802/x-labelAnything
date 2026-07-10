@@ -1,0 +1,7 @@
+type: yolov5
+name: WeiQiu_broken_yolov5
+provider: custom
+display_name: WeiQiu_broken_yolov5
+model_path: D:\Img\微球自动化\微球训练\Broken\case1_res\runs2\exp\weights\Broken.onnx
+iou_threshold: 0.45
+conf_threshold: 0.25

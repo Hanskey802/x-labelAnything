@@ -1,5 +1,0 @@
-0_OpaqueBlack
-1_TranslucentBlack
-2_LightTranslucentBlack
-3_Crack
-4_Tiny

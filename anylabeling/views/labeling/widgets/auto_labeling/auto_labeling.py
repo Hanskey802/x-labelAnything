@@ -1,18 +1,30 @@
 import os
+import re
 import yaml
 import collections
 
 from PyQt5 import uic
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, QPoint
 from PyQt5.QtWidgets import (
+    QComboBox,
     QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
     QWidget,
 )
 
+from anylabeling.paths import get_data_path
 from anylabeling.services.auto_labeling.model_manager import ModelManager
 from anylabeling.services.auto_labeling.types import AutoLabelingMode
 from anylabeling.services.auto_labeling import (
+    _CUSTOM_MODELS,
     _AUTO_LABELING_IOU_MODELS,
     _AUTO_LABELING_CONF_MODELS,
     _SKIP_PREDICTION_ON_NEW_MARKS_MODELS,
@@ -32,6 +44,136 @@ from anylabeling.views.labeling.widgets.searchable_model_dropdown import (
     _MODELS_CONFIG_PATH,
     SearchableModelDropdownPopup,
 )
+
+
+class ConfigureModelDialog(QDialog):
+    """Dialog for creating a simple custom YOLO model config."""
+
+    def __init__(self, yolo_types, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(self.tr("Configure Model"))
+        self.setMinimumWidth(520)
+
+        self.type_combo = QComboBox(self)
+        self.type_combo.addItems(yolo_types)
+
+        self.name_input = QLineEdit(self)
+        self.name_input.setPlaceholderText(self.tr("Input model name"))
+
+        self.generated_name_input = QLineEdit(self)
+        self.generated_name_input.setReadOnly(True)
+
+        self.provider_input = QLineEdit("custom", self)
+        self.provider_input.setReadOnly(True)
+
+        self.model_path_input = QLineEdit(self)
+        self.model_path_input.setReadOnly(True)
+        browse_button = QPushButton(self.tr("Browse"), self)
+        browse_button.clicked.connect(self.browse_model_path)
+
+        model_path_layout = QHBoxLayout()
+        model_path_layout.setContentsMargins(0, 0, 0, 0)
+        model_path_layout.addWidget(self.model_path_input, 1)
+        model_path_layout.addWidget(browse_button)
+
+        self.iou_spin = QDoubleSpinBox(self)
+        self.iou_spin.setRange(0.000001, 0.999999)
+        self.iou_spin.setDecimals(6)
+        self.iou_spin.setSingleStep(0.01)
+        self.iou_spin.setValue(0.45)
+
+        self.conf_spin = QDoubleSpinBox(self)
+        self.conf_spin.setRange(0.000001, 0.999999)
+        self.conf_spin.setDecimals(6)
+        self.conf_spin.setSingleStep(0.01)
+        self.conf_spin.setValue(0.25)
+
+        form_layout = QFormLayout()
+        form_layout.addRow(self.tr("type"), self.type_combo)
+        form_layout.addRow(self.tr("name"), self.name_input)
+        form_layout.addRow(self.tr("generated name"), self.generated_name_input)
+        form_layout.addRow(self.tr("provider"), self.provider_input)
+        form_layout.addRow(self.tr("model_path"), model_path_layout)
+        form_layout.addRow(self.tr("iou_threshold"), self.iou_spin)
+        form_layout.addRow(self.tr("conf_threshold"), self.conf_spin)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(form_layout)
+        layout.addWidget(button_box)
+
+        self.type_combo.currentTextChanged.connect(self.update_generated_name)
+        self.name_input.textChanged.connect(self.update_generated_name)
+        self.update_generated_name()
+
+    def browse_model_path(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("Select ONNX Model"),
+            "",
+            self.tr("ONNX Model (*.onnx)"),
+        )
+        if path:
+            self.model_path_input.setText(os.path.normpath(path))
+
+    def update_generated_name(self):
+        base_name = self.name_input.text().strip()
+        model_type = self.type_combo.currentText()
+        self.generated_name_input.setText(
+            f"{base_name}_{model_type}" if base_name else ""
+        )
+
+    def accept(self):
+        base_name = self.name_input.text().strip()
+        model_path = self.model_path_input.text().strip()
+        if not base_name:
+            QMessageBox.warning(
+                self,
+                self.tr("Invalid model"),
+                self.tr("Model name cannot be empty."),
+            )
+            return
+        if not re.match(r"^[A-Za-z0-9_-]+$", base_name):
+            QMessageBox.warning(
+                self,
+                self.tr("Invalid model"),
+                self.tr(
+                    "Model name can only contain letters, numbers, '_' and '-'."
+                ),
+            )
+            return
+        if not model_path or not os.path.isfile(model_path):
+            QMessageBox.warning(
+                self,
+                self.tr("Invalid model"),
+                self.tr("Please select a valid ONNX model file."),
+            )
+            return
+        if not model_path.lower().endswith(".onnx"):
+            QMessageBox.warning(
+                self,
+                self.tr("Invalid model"),
+                self.tr("Model file must be an ONNX file."),
+            )
+            return
+        super().accept()
+
+    def model_config(self):
+        name = self.generated_name_input.text().strip()
+        return {
+            "type": self.type_combo.currentText(),
+            "name": name,
+            "provider": "custom",
+            "display_name": name,
+            "model_path": self.model_path_input.text().strip(),
+            "iou_threshold": float(self.iou_spin.value()),
+            "conf_threshold": float(self.conf_spin.value()),
+        }
 
 
 class AutoLabelingWidget(QWidget):
@@ -89,6 +231,8 @@ class AutoLabelingWidget(QWidget):
 
         # Disable tools when inference is running
         def set_enable_tools(enable):
+            if hasattr(self, "configure_model_button"):
+                self.configure_model_button.setEnabled(enable)
             self.model_selection_button.setEnabled(enable)
             self.output_select_combobox.setEnabled(enable)
             self.button_add_point.setEnabled(enable)
@@ -117,6 +261,13 @@ class AutoLabelingWidget(QWidget):
         # ===================================
 
         # --- Configuration for: model_selection_button ---
+        self.configure_model_button = QPushButton(self.tr("Configure Model"))
+        self.configure_model_button.setStyleSheet(get_normal_button_style())
+        self.configure_model_button.clicked.connect(
+            self.open_configure_model_dialog
+        )
+        self.model_selection.insertWidget(0, self.configure_model_button)
+
         model_data = self.init_model_data()
         self.model_dropdown = SearchableModelDropdownPopup(model_data)
         self.model_dropdown.hide()
@@ -352,6 +503,104 @@ class AutoLabelingWidget(QWidget):
             sorted_inner_items = sorted(inner_dict.items(), key=inner_sort_key)
             sorted_data[key] = collections.OrderedDict(sorted_inner_items)
         return sorted_data
+
+    def get_yolo_model_types(self):
+        """Return all available YOLO-family model types."""
+        model_types = {
+            model_type
+            for model_type in _CUSTOM_MODELS
+            if "yolo" in model_type.lower()
+        }
+        for model_config in self.model_manager.get_model_configs():
+            model_type = model_config.get("type", "")
+            if "yolo" in model_type.lower():
+                model_types.add(model_type)
+        return sorted(model_types)
+
+    def open_configure_model_dialog(self):
+        dialog = ConfigureModelDialog(self.get_yolo_model_types(), self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        model_config = dialog.model_config()
+        try:
+            config_file = self.save_configured_model(model_config)
+        except Exception as e:
+            logger.exception("Failed to save custom model config")
+            QMessageBox.critical(
+                self,
+                self.tr("Configure Model"),
+                self.tr("Failed to save model config: %s") % e,
+            )
+            return
+
+        if not config_file:
+            return
+        self.load_custom_model_config(config_file)
+
+    def save_configured_model(self, model_config):
+        config_dir = get_data_path("custom_models")
+        os.makedirs(config_dir, exist_ok=True)
+        config_file = config_dir / f"{model_config['name']}.yaml"
+
+        if config_file.exists():
+            answer = QMessageBox.question(
+                self,
+                self.tr("Configure Model"),
+                self.tr(
+                    "Model config already exists:<br/><b>%s</b><br/>"
+                    "Overwrite it?"
+                )
+                % str(config_file),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return None
+
+        with open(config_file, "w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                model_config,
+                f,
+                allow_unicode=True,
+                sort_keys=False,
+            )
+        return str(config_file)
+
+    def load_custom_model_config(self, config_file):
+        self.model_manager.unload_model()
+        self.hide_labeling_widgets()
+
+        flag = self.model_manager.load_custom_model(config_file)
+        if not flag:
+            self.model_selection_button.setText("No Model")
+            return
+
+        with open(config_file, "r", encoding="utf-8") as f:
+            config_info = yaml.safe_load(f)
+
+        if not config_info["name"].startswith("_custom_"):
+            config_info["name"] = f"_custom_{config_info['name']}"
+
+        self.model_info[config_info["name"]] = {
+            "display_name": config_info["display_name"],
+            "config_path": config_file,
+        }
+
+        models_data = self.init_model_data()
+        models_data["Custom"]["load_custom_model"]["selected"] = False
+        models_data["Custom"][config_info["name"]] = {
+            "selected": True,
+            "favorite": False,
+            "display_name": config_info["display_name"],
+            "config_path": config_file,
+        }
+        save_json({"models_data": models_data}, _MODELS_CONFIG_PATH)
+        self.model_dropdown.update_models_data(models_data)
+
+        self.clear_auto_labeling_action_requested.emit()
+        self.model_selection_button.setText(config_info["display_name"])
+        self.model_selection_button.setEnabled(False)
 
     def show_model_dropdown(self):
         """Show the model dropdown"""

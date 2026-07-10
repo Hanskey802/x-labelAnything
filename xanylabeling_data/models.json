@@ -2,7 +2,7 @@
     "models_data": {
         "Custom": {
             "load_custom_model": {
-                "selected": true,
+                "selected": false,
                 "favorite": false,
                 "display_name": "...Load Custom Model"
             },
@@ -12,6 +12,12 @@
                 "display_name": "WeiQiu YOLOv5",
                 "config_path": "D:/Work_mumu/x-labelAnything/custom_models/WeiQiu-yolov5.yaml"
             },
+            "_custom_WeiQiu_broken_yolov5": {
+                "selected": true,
+                "favorite": false,
+                "display_name": "WeiQiu_broken_yolov5",
+                "config_path": "D:\\Work_mumu\\x-labelAnything\\xanylabeling_data\\custom_models\\WeiQiu_broken_yolov5.yaml"
+            },
             "_custom_xinda-yolov5": {
                 "selected": false,
                 "favorite": false,
@@ -19,7 +25,6 @@
                 "config_path": "D:/Work_mumu/x-labelAnything/custom_models/xinda-yolov5.yaml"
             }
         },
-
         "Alibaba": {
             "damo_yolo_l-r20231001": {
                 "selected": false,
