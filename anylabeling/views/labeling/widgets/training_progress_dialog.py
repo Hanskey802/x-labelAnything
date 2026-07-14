@@ -10,6 +10,10 @@ EPOCH_HEADER_RE = re.compile(
     r"^\s*Epoch\s+GPU_mem\s+box_loss\s+obj_loss\s+cls_loss\s+Instances\s+Size"
 )
 EPOCH_ROW_RE = re.compile(r"^\s*\d+/\d+\s+\S+\s+[-+]?\d")
+COMBINED_SUMMARY_HEADER = (
+    "      Epoch    GPU_mem   box_loss   obj_loss   cls_loss  "
+    "Instances       Size  precision     recall      mAP50   mAP50-90"
+)
 
 
 def clean_training_text(text):
@@ -182,6 +186,7 @@ class TrainingProgressDialog(QtWidgets.QDialog):
         self.close_after_stop = False
         self.summary_header = ""
         self.epoch_rows = {}
+        self.csv_epoch_keys = set()
         self.start_time = QtCore.QElapsedTimer()
         self.start_time.start()
 
@@ -241,21 +246,20 @@ class TrainingProgressDialog(QtWidgets.QDialog):
         last_line = ""
         for line in lines:
             if EPOCH_HEADER_RE.search(line):
-                self.summary_header = line
+                if not self.csv_epoch_keys:
+                    self.summary_header = line
                 last_line = line
                 continue
-            match = re.match(r"^\s*(\d+/\d+)\s+", line)
+            match = re.match(r"^\s*(\d+)/\d+\s+", line)
             if match:
-                self.epoch_rows[match.group(1)] = line
+                epoch_key = match.group(1)
+                if epoch_key not in self.csv_epoch_keys:
+                    self.epoch_rows[epoch_key] = line
                 last_line = line
 
-        display_lines = []
-        if self.summary_header:
-            display_lines.append(self.summary_header)
-        display_lines.extend(self.epoch_rows.values())
-        self.log_edit.setPlainText("\n".join(display_lines))
-        self.log_edit.moveCursor(QtGui.QTextCursor.End)
-        self.status_label.setText(last_line[-260:])
+        self.render_summary()
+        if not self.csv_epoch_keys:
+            self.status_label.setText(last_line[-260:])
 
     def refresh_curves(self):
         rows = self.read_results_csv()
@@ -298,38 +302,50 @@ class TrainingProgressDialog(QtWidgets.QDialog):
     def update_summary_from_csv(self, rows):
         if not rows:
             return
-        if not self.summary_header:
-            self.summary_header = (
-                "      Epoch    GPU_mem   box_loss   obj_loss   "
-                "cls_loss  Instances       Size"
-            )
+        self.summary_header = COMBINED_SUMMARY_HEADER
         for row in rows:
             epoch = row.get("epoch")
             if epoch is None:
                 continue
             epoch_key = str(int(epoch))
+            self.csv_epoch_keys.add(epoch_key)
             self.epoch_rows[epoch_key] = (
                 f"{epoch_key:>11} {'-':>10} "
                 f"{self.format_metric(row.get('train/box_loss')):>10} "
                 f"{self.format_metric(row.get('train/obj_loss')):>10} "
                 f"{self.format_metric(row.get('train/cls_loss')):>10} "
-                f"{'-':>10} {'-':>10}"
+                f"{'-':>10} {'-':>10} "
+                f"{self.format_metric(row.get('metrics/precision')):>10} "
+                f"{self.format_metric(row.get('metrics/recall')):>10} "
+                f"{self.format_metric(row.get('metrics/mAP_0.5')):>10} "
+                f"{self.format_metric(row.get('metrics/mAP_0.5:0.95')):>10}"
             )
 
-        display_lines = [self.summary_header, *self.epoch_rows.values()]
-        self.log_edit.setPlainText("\n".join(display_lines))
-        self.log_edit.moveCursor(QtGui.QTextCursor.End)
+        self.render_summary()
         latest = rows[-1]
         latest_epoch = latest.get("epoch")
         if latest_epoch is not None:
             self.status_label.setText(
-                self.tr("Epoch %s completed. mAP50=%s, mAP50-90=%s")
+                self.tr(
+                    "Epoch %s completed. precision=%s, recall=%s, "
+                    "mAP50=%s, mAP50-90=%s"
+                )
                 % (
                     int(latest_epoch),
+                    self.format_metric(latest.get("metrics/precision")),
+                    self.format_metric(latest.get("metrics/recall")),
                     self.format_metric(latest.get("metrics/mAP_0.5")),
                     self.format_metric(latest.get("metrics/mAP_0.5:0.95")),
                 )
             )
+
+    def render_summary(self):
+        display_lines = []
+        if self.summary_header:
+            display_lines.append(self.summary_header)
+        display_lines.extend(self.epoch_rows.values())
+        self.log_edit.setPlainText("\n".join(display_lines))
+        self.log_edit.moveCursor(QtGui.QTextCursor.End)
 
     def format_metric(self, value):
         if value is None:
