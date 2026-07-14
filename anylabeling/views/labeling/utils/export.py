@@ -142,13 +142,12 @@ def _resolve_json_to_yolo_script_path():
     workspace_root = repo_root.parent
     candidates = [
         repo_root / "scripts" / "xanylabeling_json_to_yolo.py",
-        workspace_root / "ClearML" / "scripts" / "xanylabeling_json_to_yolo.py",
         workspace_root / "scripts" / "xanylabeling_json_to_yolo.py",
     ]
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    return candidates[1]
+    return candidates[0]
 
 
 def export_xanylabeling_json_to_yolo(self):

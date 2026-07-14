@@ -9,6 +9,37 @@ import yaml
 
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+YOLO_SPLITS = {"train", "val", "test"}
+DEFAULT_HYPERPARAMETERS = {
+    "lr0": 0.01,
+    "lrf": 0.01,
+    "momentum": 0.937,
+    "weight_decay": 0.0005,
+    "warmup_epochs": 3.0,
+    "warmup_momentum": 0.8,
+    "warmup_bias_lr": 0.1,
+    "box": 0.05,
+    "cls": 0.5,
+    "cls_pw": 1.0,
+    "obj": 1.0,
+    "obj_pw": 1.0,
+    "iou_t": 0.20,
+    "anchor_t": 4.0,
+    "fl_gamma": 0.0,
+    "hsv_h": 0.015,
+    "hsv_s": 0.7,
+    "hsv_v": 0.4,
+    "degrees": 0.0,
+    "translate": 0.1,
+    "scale": 0.5,
+    "shear": 0.0,
+    "perspective": 0.0,
+    "flipud": 0.0,
+    "fliplr": 0.5,
+    "mosaic": 1.0,
+    "mixup": 0.0,
+    "copy_paste": 0.0,
+}
 
 
 def load_classes_from_yaml(yaml_path: Path) -> list[str]:
@@ -94,8 +125,12 @@ def build_output_label_path(
     parts = list(relative.parts)
     if parts and parts[0] == "images":
         parts[0] = "labels"
-    else:
+    elif parts and parts[0] == "labels":
+        pass
+    elif parts and parts[0] in YOLO_SPLITS:
         parts.insert(0, "labels")
+    else:
+        parts = ["labels", "train", *parts]
     return output_root.joinpath(*parts).with_suffix(".txt")
 
 
@@ -106,10 +141,14 @@ def build_output_image_path(
     parts = list(relative.parts)
     if parts and parts[0] == "labels":
         parts[0] = "images"
-    elif parts and parts[0] != "images":
+    elif parts and parts[0] == "images":
+        pass
+    elif parts and parts[0] in YOLO_SPLITS:
         parts.insert(0, "images")
+    elif parts and parts[0] != "images":
+        parts = ["images", "train", *parts]
     elif not parts:
-        parts = ["images", json_file.name]
+        parts = ["images", "train", json_file.name]
     return output_root.joinpath(*parts).with_suffix(image_suffix)
 
 
@@ -270,6 +309,16 @@ def main():
         encoding="utf-8",
     )
 
+    hyp_yaml = output_root / "hyp.yaml"
+    hyp_yaml.write_text(
+        yaml.safe_dump(
+            DEFAULT_HYPERPARAMETERS,
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
     print(f"json files: {len(json_files)}")
     print(f"classes: {len(classes)} -> {classes}")
     print(f"converted shapes: {converted_total}")
@@ -277,6 +326,7 @@ def main():
     if not val_dir.exists():
         print("val split not found; dataset.yaml uses images/train as val")
     print(f"output root: {output_root}")
+    print(f"hyp yaml: {hyp_yaml}")
 
 
 if __name__ == "__main__":

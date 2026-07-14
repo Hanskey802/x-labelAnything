@@ -22,5 +22,10 @@ from .label_list_widget import LabelListWidget, LabelListWidgetItem
 from .overview_dialog import OverviewDialog
 from .popup import Popup
 from .toolbar import ToolBar
+from .training_dialog import TrainingDialog
+from .training_progress_dialog import (
+    TrainingProgressDialog,
+    decode_process_output,
+)
 from .unique_label_qlist_widget import UniqueLabelQListWidget
 from .zoom_widget import ZoomWidget

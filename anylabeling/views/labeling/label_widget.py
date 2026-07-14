@@ -5,7 +5,9 @@ import math
 import os
 import os.path as osp
 import re
+import shlex
 import shutil
+import subprocess
 import tempfile
 
 import cv2
@@ -60,8 +62,11 @@ from .widgets import (
     OverviewDialog,
     SearchBar,
     ToolBar,
+    TrainingDialog,
+    TrainingProgressDialog,
     UniqueLabelQListWidget,
     ZoomWidget,
+    decode_process_output,
 )
 
 LABEL_COLORMAP = utils.label_colormap()
@@ -1467,6 +1472,11 @@ class LabelingWidget(LabelDialog):
             "brain",
             self.tr("Auto Labeling"),
         )
+        train_yolov5 = action(
+            self.tr("训练"),
+            self.open_training_dialog,
+            tip=self.tr("Run local YOLOv5 training"),
+        )
 
         # Label list context menu.
         label_menu = QtWidgets.QMenu()
@@ -1582,6 +1592,7 @@ class LabelingWidget(LabelDialog):
             open_prev_unchecked_image=open_prev_unchecked_image,
             open_chatbot=open_chatbot,
             open_vqa=open_vqa,
+            train_yolov5=train_yolov5,
             file_menu_actions=(
                 open_,
                 openvideo,
@@ -1675,6 +1686,9 @@ class LabelingWidget(LabelDialog):
             help=self.menu(self.tr("&Help")),
             recent_files=QtWidgets.QMenu(self.tr("Open &Recent")),
             label_list=label_menu,
+        )
+        self.parent.parent.menuBar().insertAction(
+            self.menus.help.menuAction(), train_yolov5
         )
 
         utils.add_actions(
@@ -2432,6 +2446,164 @@ class LabelingWidget(LabelDialog):
     def open_vqa(self):
         dialog = VQADialog(self)
         _ = dialog.exec_()
+
+    def open_training_dialog(self):
+        dialog = TrainingDialog(self.settings, self.last_open_dir, self)
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return
+
+        self.start_training_process(dialog.training_config())
+
+    def start_training_process(self, config):
+        process = QtCore.QProcess(self)
+        process.setProgram(config["python"])
+        process.setArguments(self.build_training_args(config))
+        process.setWorkingDirectory(config["yolov5_dir"])
+        process.setProcessChannelMode(QtCore.QProcess.MergedChannels)
+        process.setProcessEnvironment(self.training_process_environment())
+
+        run_dir = osp.join(config["result_dir"], "exp")
+        results_csv = osp.join(run_dir, "results.csv")
+        self.prepare_training_result_dir(run_dir)
+        progress = TrainingProgressDialog(results_csv, self)
+        progress.stop_requested.connect(
+            lambda: self.stop_training_process_tree(process)
+        )
+
+        command_preview = " ".join(
+            f'"{arg}"' if " " in arg else arg
+            for arg in [config["python"], *process.arguments()]
+        )
+        progress.set_status(self.tr("Starting command: %s") % command_preview)
+
+        self.training_process = process
+        self.training_process_output = []
+        self.training_progress_dialog = progress
+
+        def read_output():
+            data = decode_process_output(process.readAllStandardOutput())
+            if data:
+                self.training_process_output.append(data)
+                self.training_process_output = self.training_process_output[
+                    -200:
+                ]
+                progress.append_output(data)
+
+        def cleanup():
+            self.actions.train_yolov5.setEnabled(True)
+            process.deleteLater()
+            self.training_process = None
+            self.training_progress_dialog = None
+
+        def finished(exit_code, exit_status):
+            read_output()
+            output = "".join(self.training_process_output)
+            cleanup()
+            if (
+                exit_status == QtCore.QProcess.NormalExit
+                and exit_code == 0
+            ):
+                message = self.tr("Local YOLOv5 training finished.")
+                message += " " + self.tr("Result directory: %s") % run_dir
+                progress.finish(True, message)
+                QtWidgets.QMessageBox.information(
+                    self,
+                    self.tr("Train YOLOv5"),
+                    self.tr("Training finished.<br/>Result directory:<br/><b>%s</b>")
+                    % run_dir,
+                )
+                return
+
+            tail = html.escape(output[-4000:] or self.tr("No output."))
+            progress.finish(False, self.tr("Local training failed."))
+            self.error_message(
+                self.tr("Train YOLOv5"),
+                self.tr("Local training failed:<br/><pre>%s</pre>")
+                % tail,
+            )
+
+        process.readyReadStandardOutput.connect(read_output)
+        process.finished.connect(finished)
+
+        self.actions.train_yolov5.setEnabled(False)
+        progress.show()
+        process.start()
+        if not process.waitForStarted(3000):
+            output = process.errorString()
+            cleanup()
+            progress.finish(False, self.tr("Failed to start training."))
+            self.error_message(
+                self.tr("Train YOLOv5"),
+                self.tr("Failed to start training:<br/><b>%s</b>") % output,
+            )
+
+    def stop_training_process_tree(self, process):
+        if process.state() == QtCore.QProcess.NotRunning:
+            return
+        pid = int(process.processId() or 0)
+        if os.name == "nt" and pid:
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    check=False,
+                )
+                return
+            except OSError:
+                pass
+        process.kill()
+
+    def build_training_args(self, config):
+        train_py = osp.join(config["yolov5_dir"], "train.py")
+        args = [
+            "-u",
+            train_py,
+            "--data",
+            config["data"],
+            "--weights",
+            config["weights"],
+            "--hyp",
+            config["hyp"],
+            "--epochs",
+            str(config["epochs"]),
+            "--batch-size",
+            str(config["batch_size"]),
+            "--imgsz",
+            str(config["imgsz"]),
+            "--workers",
+            str(config["workers"]),
+            "--project",
+            config["result_dir"],
+            "--name",
+            "exp",
+            "--exist-ok",
+        ]
+        if config["device"]:
+            args.extend(["--device", config["device"]])
+        if config["extra_args"]:
+            args.extend(shlex.split(config["extra_args"]))
+        return args
+
+    def training_process_environment(self):
+        env = QtCore.QProcessEnvironment.systemEnvironment()
+        env.insert("PYTHONUTF8", "1")
+        env.insert("PYTHONIOENCODING", "utf-8")
+        env.insert("PYTHONUNBUFFERED", "1")
+        env.insert("WANDB_DISABLED", "true")
+        env.insert("WANDB_MODE", "disabled")
+        env.insert("COMET_MODE", "disabled")
+        env.insert("COMET_LOG_PREDICTIONS", "false")
+        env.insert("COMET_LOG_CONFUSION_MATRIX", "false")
+        env.insert("CLEARML_OFFLINE_MODE", "1")
+        return env
+
+    def prepare_training_result_dir(self, run_dir):
+        os.makedirs(run_dir, exist_ok=True)
+        results_csv = osp.join(run_dir, "results.csv")
+        if osp.exists(results_csv):
+            os.remove(results_csv)
 
     # Help
     def documentation(self):
